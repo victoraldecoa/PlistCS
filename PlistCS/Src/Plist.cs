@@ -298,7 +298,7 @@ namespace PlistCS
             return array;
         }
 
-        private static void composeArray(List<object> value, XmlWriter writer)
+        private static void composeArray(IEnumerable value, XmlWriter writer)
         {
             writer.WriteStartElement("array");
             foreach (object obj in value)
@@ -341,7 +341,6 @@ namespace PlistCS
 
         private static void compose(object value, XmlWriter writer)
         {
-
             if (value == null || value is string)
             {
                 writer.WriteElementString("string", value as string);
@@ -350,25 +349,9 @@ namespace PlistCS
             {
                 writer.WriteElementString("integer", ((int)value).ToString(System.Globalization.NumberFormatInfo.InvariantInfo));
             }
-            else if (value is System.Collections.Generic.Dictionary<string, object> ||
-              value.GetType().ToString().StartsWith("System.Collections.Generic.Dictionary`2[System.String"))
+            else if (value is IDictionary dictionary)
             {
-                //Convert to Dictionary<string, object>
-                Dictionary<string, object> dic = value as Dictionary<string, object>;
-                if (dic == null)
-                {
-                    dic = new Dictionary<string, object>();
-                    IDictionary idic = (IDictionary)value;
-                    foreach (var key in idic.Keys)
-                    {
-                        dic.Add(key.ToString(), idic[key]);
-                    }
-                }
-                writeDictionaryValues(dic, writer);
-            }
-            else if (value is List<object>)
-            {
-                composeArray((List<object>)value, writer);
+                writeDictionaryValues(dictionary, writer);
             }
             else if (value is byte[])
             {
@@ -388,13 +371,18 @@ namespace PlistCS
             {
                 writer.WriteElementString(value.ToString().ToLower(), "");
             }
+            // IEnumerable has to come after IDictionary, string and byte[], otherwise it will match those types
+            else if (value is IEnumerable enumerable)
+            {
+                composeArray(enumerable, writer);
+            }
             else
             {
                 throw new Exception(String.Format("Value type '{0}' is unhandled", value.GetType().ToString()));
             }
         }
 
-        private static void writeDictionaryValues(Dictionary<string, object> dictionary, XmlWriter writer)
+        private static void writeDictionaryValues(IDictionary dictionary, XmlWriter writer)
         {
             writer.WriteStartElement("dict");
             foreach (string key in dictionary.Keys)
@@ -409,24 +397,24 @@ namespace PlistCS
         private static int countObject(object value)
         {
             int count = 0;
-            switch (value.GetType().ToString())
+            switch (value)
             {
-                case "System.Collections.Generic.Dictionary`2[System.String,System.Object]":
-                    Dictionary<string, object> dict = (Dictionary<string, object>)value;
-                    foreach (string key in dict.Keys)
+                case IDictionary dictionary:
+                    foreach (var dictValue in dictionary.Values)
                     {
-                        count += countObject(dict[key]);
+                        count += countObject(dictValue);
                     }
-                    count += dict.Keys.Count;
+                    count += dictionary.Keys.Count;
                     count++;
+
                     break;
-                case "System.Collections.Generic.List`1[System.Object]":
-                    List<object> list = (List<object>)value;
-                    foreach (object obj in list)
+                case IEnumerable enumerable:
+                    foreach (var item in enumerable)
                     {
-                        count += countObject(obj);
+                        count += countObject(item);
                     }
                     count++;
+
                     break;
                 default:
                     count++;
@@ -435,7 +423,7 @@ namespace PlistCS
             return count;
         }
 
-        private static byte[] writeBinaryDictionary(Dictionary<string, object> dictionary)
+        private static byte[] writeBinaryDictionary(IDictionary dictionary)
         {
             List<byte> buffer = new List<byte>();
             List<byte> header = new List<byte>();
@@ -485,8 +473,13 @@ namespace PlistCS
             return buffer.ToArray();
         }
 
-        private static byte[] composeBinaryArray(List<object> objects)
+        private static byte[] writeBinaryArray(IEnumerable enumerable)
         {
+            List<object> objects = new List<object>();
+            foreach (object obj in enumerable)
+            {
+                objects.Add(obj);
+            }
             List<byte> buffer = new List<byte>();
             List<byte> header = new List<byte>();
             List<int> refs = new List<int>();
@@ -523,46 +516,19 @@ namespace PlistCS
             return buffer.ToArray();
         }
 
-        private static byte[] composeBinary(object obj)
-        {
-            byte[] value;
-            switch (obj.GetType().ToString())
-            {
-                case "System.Collections.Generic.Dictionary`2[System.String,System.Object]":
-                    value = writeBinaryDictionary((Dictionary<string, object>)obj);
-                    return value;
-
-                case "System.Collections.Generic.List`1[System.Object]":
-                    value = composeBinaryArray((List<object>)obj);
-                    return value;
-
-                case "System.Byte[]":
-                    value = writeBinaryByteArray((byte[])obj);
-                    return value;
-
-                case "System.Double":
-                    value = writeBinaryDouble((double)obj);
-                    return value;
-
-                case "System.Int32":
-                    value = writeBinaryInteger((int)obj, true);
-                    return value;
-
-                case "System.String":
-                    value = writeBinaryString((string)obj, true);
-                    return value;
-
-                case "System.DateTime":
-                    value = writeBinaryDate((DateTime)obj);
-                    return value;
-
-                case "System.Boolean":
-                    value = writeBinaryBool((bool)obj);
-                    return value;
-
-                default:
-                    return new byte[0];
-            }
+        private static byte[] composeBinary(object obj) {
+            return obj switch {
+                IDictionary dictionary => writeBinaryDictionary(dictionary),
+                byte[] byteArray => writeBinaryByteArray(byteArray),
+                double d => writeBinaryDouble(d),
+                int i => writeBinaryInteger(i, true),
+                string s => writeBinaryString(s, true),
+                DateTime dt => writeBinaryDate(dt),
+                bool b => writeBinaryBool(b),
+                // IEnumerable has to come after IDictionary, string and byte[], otherwise it will match those types
+                IEnumerable enumerable => writeBinaryArray(enumerable),
+                _ => new byte[0]
+            };
         }
 
         public static byte[] writeBinaryDate(DateTime obj)
